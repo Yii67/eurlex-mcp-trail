@@ -144,7 +144,9 @@ export class CellarClient {
     );
 
     // CELEX identifier
-    whereLines.push('    ?work cdm:resource_legal_id_celex ?celex .');
+    whereLines.push('    OPTIONAL { ?work cdm:resource_legal_id_celex ?celex . }');
+    whereLines.push('    OPTIONAL { ?work cdm:work_id_document ?celex . }');
+    whereLines.push('    FILTER(BOUND(?celex))');
 
     // Expression and title (REQUIRED, not optional)
     whereLines.push(
