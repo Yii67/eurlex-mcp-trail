@@ -25,5 +25,8 @@ export const RESOURCE_TYPES = [
   'ORDER',
   'OPIN_AG',
   'RECO',
+  'COM',
+  'SWD',
+  'JOIN',
   'any',
 ] as const;
