@@ -152,7 +152,7 @@ export class CellarClient {
     whereLines.push(
       `    ?expr cdm:expression_belongs_to_work ?work .`,
       `    ?expr cdm:expression_uses_language <http://publications.europa.eu/resource/authority/language/${lang}> .`,
-      `    ?expr cdm:expression_title ?title .`,
+      '    { ?expr cdm:expression_title ?title . } UNION { ?work cdm:work_title ?title . }',
     );
 
     // Date is OPTIONAL
