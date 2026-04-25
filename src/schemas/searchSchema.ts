@@ -13,7 +13,7 @@ export const searchSchema = z
       .enum(RESOURCE_TYPES)
       .default('any')
       .describe(
-        'Dokumenttyp: REG=Verordnung, DIR=Richtlinie, DEC=Entscheidung, JUDG=Urteil, REG_IMPL=Durchführungsverordnung, REG_DEL=Delegierte Verordnung, RECO=Empfehlung, ORDER=Gerichtsbeschluss, OPIN_AG=Schlussanträge des Generalanwalts, COM=Mitteilung, SWD=Arbeitsdokument der Dienststellen, JOIN=Gemeinsame Mitteilung',
+        'Dokumenttyp: REG=Verordnung, DIR=Richtlinie, DEC=Entscheidung, JUDG=Urteil, REG_IMPL=Durchführungsverordnung, REG_DEL=Delegierte Verordnung, RECO=Empfehlung, ORDER=Gerichtsbeschluss, OPIN_AG=Schlussanträge des Generalanwalts, COMMUNIC=Mitteilung, SWD=Arbeitsdokument der Dienststellen, JOIN=Gemeinsame Mitteilung',
       ),
     language: z
       .enum(['DEU', 'ENG', 'FRA'])

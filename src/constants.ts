@@ -25,7 +25,7 @@ export const RESOURCE_TYPES = [
   'ORDER',
   'OPIN_AG',
   'RECO',
-  'COM',
+  'COMMUNIC',
   'SWD',
   'JOIN',
   'any',
