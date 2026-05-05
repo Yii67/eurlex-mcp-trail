@@ -13,8 +13,8 @@ export const consolidatedSchema = z
       .number()
       .int()
       .min(1000)
-      .max(50000)
-      .default(20000)
+      .max(200000)
+      .default(50000)
       .describe('Maximale Zeichenanzahl'),
   })
   .strict();
