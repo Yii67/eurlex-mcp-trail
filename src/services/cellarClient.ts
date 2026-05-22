@@ -90,6 +90,18 @@ interface SparqlResponse {
   };
 }
 
+/** Shape of the deadlines SPARQL JSON results */
+interface DeadlinesSparqlResponse {
+  results: {
+    bindings: {
+      dateForce?: SparqlBindingValue;
+      dateTrans?: SparqlBindingValue;
+      deadline?: SparqlBindingValue;
+      deadlineComment?: SparqlBindingValue;
+    }[];
+  };
+}
+
 /**
  * Escapes a string for safe inclusion in a SPARQL literal.
  * Escapes backslashes and double-quotes.
@@ -216,7 +228,7 @@ export class CellarClient {
         title: binding.title.value,
         date: binding.date?.value ?? '',
         type: binding.resType.value,
-        eurlex_url: `${EURLEX_BASE}/${LANGUAGE_HTTP_MAP[lang] ?? 'de'}/TXT/?uri=CELEX:${celex}`,
+        eurlex_url: `${EURLEX_BASE}/${LANGUAGE_HTTP_MAP[lang] ?? 'en'}/TXT/?uri=CELEX:${celex}`,
       };
     });
 
@@ -236,7 +248,7 @@ export class CellarClient {
    * Uses Accept-Language header to select the language variant.
    */
   async fetchDocument(celex_id: string, language: string): Promise<string> {
-    const httpLang = LANGUAGE_HTTP_MAP[language] ?? 'de';
+    const httpLang = LANGUAGE_HTTP_MAP[language] ?? 'en';
     const url = `${CELLAR_REST_BASE}/${celex_id}`;
 
     const response = await fetch(url, {
@@ -270,10 +282,11 @@ export class CellarClient {
 
   /**
    * Builds a SPARQL query to retrieve metadata for a given CELEX ID.
+   * Language defaults to ENG — EuroVoc labels are returned in the requested language.
    */
   buildMetadataQuery(celexId: string, language: string): string {
     const lang = LANGUAGE_URI_MAP[language] ?? language;
-    const langLower = LANGUAGE_HTTP_MAP[language] ?? 'de';
+    const langLower = LANGUAGE_HTTP_MAP[language] ?? 'en'; // ← was 'de', now 'en'
 
     const query = [
       'PREFIX cdm: <http://publications.europa.eu/ontology/cdm#>',
@@ -306,7 +319,7 @@ export class CellarClient {
       '  OPTIONAL {',
       '    ?work cdm:work_is_about_concept_eurovoc ?evConcept .',
       '    ?evConcept skos:prefLabel ?evLabel .',
-      `    FILTER(LANG(?evLabel) = "${langLower}")`,
+      `    FILTER(LANG(?evLabel) = "${langLower}")`, // ← now 'en' when ENG passed
       '  }',
       '  OPTIONAL {',
       '    ?work cdm:resource_legal_is_about_concept_directory-code ?dirCode .',
@@ -331,7 +344,7 @@ export class CellarClient {
     }
 
     const binding = data.results.bindings[0];
-    const httpLang = LANGUAGE_HTTP_MAP[language] ?? 'de';
+    const httpLang = LANGUAGE_HTTP_MAP[language] ?? 'en';
 
     const splitConcat = (value: string | undefined): string[] => {
       if (!value) return [];
@@ -372,7 +385,6 @@ export class CellarClient {
     const lang = LANGUAGE_URI_MAP[language] ?? language;
     const escaped = escapeSparqlString(celexId);
 
-    // Use FILTER(STR(...)) for CELEX matching — literals may be typed as xsd:string
     const sourceFilter = `    ?sourceWork cdm:resource_legal_id_celex ?srcCelex .\n    FILTER(STR(?srcCelex) = "${escaped}")`;
 
     const citesBlock = [
@@ -447,7 +459,7 @@ export class CellarClient {
     limit: number,
   ): Promise<CitationsResult> {
     const sparql = this.buildCitationsQuery(celexId, language, direction, limit);
-    const httpLang = LANGUAGE_HTTP_MAP[language] ?? 'de';
+    const httpLang = LANGUAGE_HTTP_MAP[language] ?? 'en';
 
     const data = await this.executeSparql<CitationsSparqlResponse>(sparql);
 
@@ -496,15 +508,12 @@ export class CellarClient {
       const bindings = data.results.bindings;
       return bindings.length > 0 ? bindings[0].concept.value : null;
     } catch {
-      // Timeout or SPARQL error during label resolution — return null to indicate no match
       return null;
     }
   }
 
   /**
    * Builds a SPARQL query to find EU legal acts by EuroVoc concept URI.
-   * Only accepts a direct EuroVoc URI — label resolution must be done beforehand
-   * via resolveEurovocLabel().
    */
   buildEurovocQuery(
     conceptUri: string,
@@ -514,24 +523,19 @@ export class CellarClient {
   ): string {
     const lang = LANGUAGE_URI_MAP[language] ?? language;
 
-    // Only accept URIs
     if (!conceptUri.startsWith('http')) {
       throw new Error(
         `Invalid concept: expected a URI starting with http, got "${conceptUri}". Use resolveEurovocLabel() first.`,
       );
     }
-
-    // Reject angle brackets — they can break SPARQL IRI syntax
     if (/[<>]/.test(conceptUri)) {
       throw new Error(`Invalid URI: contains characters not allowed in SPARQL IRIs`);
     }
-
     if (/[\s"{}|\\^`]/.test(conceptUri)) {
       throw new Error(`Invalid URI: contains characters not allowed in SPARQL IRIs`);
     }
 
     const conceptFilter = `  ?work cdm:work_is_about_concept_eurovoc <${conceptUri}> .`;
-
     const typeFilter =
       resourceType !== 'any'
         ? `  ?work cdm:work_has_resource-type <http://publications.europa.eu/resource/authority/resource-type/${resourceType}> .`
@@ -560,8 +564,7 @@ export class CellarClient {
   }
 
   /**
-   * Executes a EuroVoc concept query against the SPARQL endpoint and returns search results.
-   * For label-based concepts, first resolves the label to a URI via a lightweight query.
+   * Executes a EuroVoc concept query against the SPARQL endpoint.
    */
   async eurovocQuery(
     concept: string,
@@ -576,14 +579,12 @@ export class CellarClient {
       conceptUri = concept;
     } else {
       const resolved = await this.resolveEurovocLabel(concept);
-      if (resolved === null) {
-        return [];
-      }
+      if (resolved === null) return [];
       conceptUri = resolved;
     }
 
     const sparql = this.buildEurovocQuery(conceptUri, resourceType, language, limit);
-    const httpLang = LANGUAGE_HTTP_MAP[language] ?? 'de';
+    const httpLang = LANGUAGE_HTTP_MAP[language] ?? 'en';
 
     const data = await this.executeSparql<SparqlResponse>(sparql);
     return data.results.bindings.map((b) => ({
@@ -604,7 +605,6 @@ export class CellarClient {
 
   /**
    * Finds the consolidated CELEX ID for a given document via SPARQL.
-   * Consolidated CELEX IDs have prefix 0, e.g. 02024R1689-20240712.
    */
   async findConsolidatedCelex(
     docType: string,
@@ -631,9 +631,7 @@ export class CellarClient {
   }
 
   /**
-   * Fetches the consolidated (currently applicable) version of an EU legal act.
-   * Step 1: Find consolidated CELEX ID via SPARQL.
-   * Step 2: Fetch document from Cellar REST (same endpoint as fetchDocument).
+   * Fetches the consolidated version of an EU legal act.
    */
   async fetchConsolidated(
     docType: string,
@@ -641,7 +639,6 @@ export class CellarClient {
     number: number,
     language: string,
   ): Promise<{ content: string; eliUrl: string }> {
-    // Step 1: Find consolidated CELEX ID
     const consolidatedCelex = await this.findConsolidatedCelex(docType, year, number);
 
     if (!consolidatedCelex) {
@@ -651,8 +648,7 @@ export class CellarClient {
       );
     }
 
-    // Step 2: Fetch from Cellar REST (same as fetchDocument)
-    const httpLang = LANGUAGE_HTTP_MAP[language] ?? 'de';
+    const httpLang = LANGUAGE_HTTP_MAP[language] ?? 'en';
     const url = `${CELLAR_REST_BASE}/${consolidatedCelex}`;
 
     const response = await fetch(url, {
@@ -680,5 +676,83 @@ export class CellarClient {
 
     const eliUrl = `http://data.europa.eu/eli/${docType}/${year}/${number}`;
     return { content: await response.text(), eliUrl };
+  }
+
+  /**
+   * Builds a SPARQL query to retrieve all compliance deadlines for a CELEX ID.
+   * Fetches entry into force, transposition deadline, and all application dates.
+   */
+  buildDeadlinesQuery(celexId: string): string {
+    const escaped = escapeSparqlString(celexId);
+
+    return [
+      'PREFIX cdm: <http://publications.europa.eu/ontology/cdm#>',
+      'PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>',
+      'PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>',
+      '',
+      'SELECT DISTINCT ?dateForce ?dateTrans ?deadline ?deadlineComment WHERE {',
+      `  ?work cdm:resource_legal_id_celex ?celexVal .`,
+      `  FILTER(STR(?celexVal) = "${escaped}")`,
+      '  OPTIONAL { ?work cdm:resource_legal_date_entry-into-force ?dateForce . }',
+      '  OPTIONAL { ?work cdm:resource_legal_date_transposition ?dateTrans . }',
+      '  OPTIONAL {',
+      '    ?work cdm:resource_legal_date_deadline ?deadline .',
+      '    OPTIONAL { ?deadline rdfs:comment ?deadlineComment . }',
+      '  }',
+      '}',
+    ].join('\n');
+  }
+
+  /**
+   * Fetches all compliance deadlines for a CELEX ID.
+   * Returns entry into force, transposition deadline, and all application deadlines.
+   */
+  async deadlinesQuery(
+    celexId: string,
+    language: string,
+  ): Promise<{
+    celex_id: string;
+    date_entry_into_force: string;
+    date_transposition: string;
+    deadlines: { date: string; comment: string }[];
+    eurlex_url: string;
+  }> {
+    const sparql = this.buildDeadlinesQuery(celexId);
+    const httpLang = LANGUAGE_HTTP_MAP[language] ?? 'en';
+
+    const data = await this.executeSparql<DeadlinesSparqlResponse>(sparql);
+    const bindings = data.results.bindings;
+
+    if (bindings.length === 0) {
+      throw new Error(`No deadline data found for CELEX: ${celexId}`);
+    }
+
+    const first = bindings[0];
+    const dateForce = first.dateForce?.value ?? '';
+    const dateTrans = first.dateTrans?.value ?? '';
+
+    // Collect all unique deadlines and sort chronologically
+    const seen = new Set<string>();
+    const deadlines: { date: string; comment: string }[] = [];
+
+    for (const b of bindings) {
+      if (b.deadline?.value && !seen.has(b.deadline.value)) {
+        seen.add(b.deadline.value);
+        deadlines.push({
+          date: b.deadline.value,
+          comment: b.deadlineComment?.value ?? '',
+        });
+      }
+    }
+
+    deadlines.sort((a, b) => a.date.localeCompare(b.date));
+
+    return {
+      celex_id: celexId,
+      date_entry_into_force: dateForce,
+      date_transposition: dateTrans,
+      deadlines,
+      eurlex_url: `${EURLEX_BASE}/${httpLang}/TXT/?uri=CELEX:${celexId}`,
+    };
   }
 }
