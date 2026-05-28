@@ -127,7 +127,9 @@ export function createApp(): {
 
 if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
   const { app } = createApp();
-  const PORT = process.env.PORT ?? 3001;
+  const PORT = 3001;
+  console.log('PORT env:', process.env.PORT);
+  console.log('All env vars:', JSON.stringify(process.env, null, 2));
   app.listen(Number(PORT), '0.0.0.0', () => {
     console.log(`eurlex-mcp-server listening on http://0.0.0.0:${PORT}`);
   });
