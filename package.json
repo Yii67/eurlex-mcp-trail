@@ -32,7 +32,7 @@
     "test:coverage": "vitest run --coverage",
     "prebuild": "pnpm run typecheck",
     "prepublishOnly": "pnpm run check && pnpm run build",
-    "prepare": "husky"
+    "prepare": "husky || true"
   },
   "keywords": [
     "mcp",
