@@ -30,7 +30,7 @@
     "check": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run test",
     "inspect": "pnpm dlx @modelcontextprotocol/inspector node dist/index.js",
     "test:coverage": "vitest run --coverage",
-    "prebuild": "pnpm run typecheck",
+    "prebuild": "npm run typecheck",
     "prepublishOnly": "pnpm run check && pnpm run build",
     "prepare": "husky || true"
   },
