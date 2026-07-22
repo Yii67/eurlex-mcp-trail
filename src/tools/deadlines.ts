@@ -1,5 +1,5 @@
 // src/tools/deadlines.ts
-// New tool: eurlex_deadlines
+// Tool: eurlex_deadlines
 // Returns compliance deadlines for a given CELEX ID.
 // Deadlines are stored as cdm:resource_legal_date_deadline in the Cellar.
 
@@ -12,16 +12,31 @@ import { toolError } from '../utils.js';
 export const deadlinesSchema = z.object({
   celex_id: z.string().min(1).describe('CELEX identifier of the EU legal act'),
   language: z.enum(['ENG', 'DEU', 'FRA']).default('ENG'),
+  include_context: z
+    .boolean()
+    .default(false)
+    .describe(
+      'When true, fetches the full document text and resolves each deadline to the ' +
+        'specific article that references it (slower — one document fetch per call). ' +
+        'When false (default), returns bare deadline dates only via SPARQL metadata ' +
+        '(fast). Use false when listing many documents at once; use true only when ' +
+        'showing the full detail for a single document.',
+    ),
 });
 
 export async function handleEurlexDeadlines(input: {
   celex_id: string;
   language: string;
+  include_context?: boolean;
 }): Promise<{ content: { type: 'text'; text: string }[]; isError?: true }> {
   try {
     const parsed = deadlinesSchema.parse(input);
     const client = new CellarClient();
-    const result = await client.deadlinesQuery(parsed.celex_id, parsed.language);
+    const result = await client.deadlinesQuery(
+      parsed.celex_id,
+      parsed.language,
+      parsed.include_context,
+    );
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(result) }],
     };
@@ -33,7 +48,11 @@ export async function handleEurlexDeadlines(input: {
 export function registerDeadlinesTool(server: McpServer): void {
   server.tool(
     'eurlex_deadlines',
-    'Returns compliance deadlines and key implementation dates for an EU legal act by CELEX ID. Includes entry into force, transposition deadline, and all article-specific application dates.',
+    'Returns compliance deadlines and key implementation dates for an EU legal act by ' +
+      'CELEX ID. Includes entry into force, transposition deadline, and all ' +
+      'article-specific application dates. Set include_context=true to also resolve ' +
+      'each deadline to the specific article text it refers to (slower, one document ' +
+      'fetch — use only for single-document detail views, not list/search results).',
     deadlinesSchema.shape,
     { readOnlyHint: true, destructiveHint: false },
     async (params) => handleEurlexDeadlines(params),

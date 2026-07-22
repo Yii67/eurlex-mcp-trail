@@ -809,10 +809,18 @@ export class CellarClient {
    * Falls back gracefully (article_ref/context = null) if the document
    * text can't be fetched or the date can't be located in it — the
    * bare date is still returned so the feature degrades, not breaks.
+   *
+   * @param includeContext When false (default), skips the document fetch
+   *   and article-context extraction entirely — returns bare dates only,
+   *   as fast as the original SPARQL-only version. Use this for list views
+   *   showing many documents at once. Set to true only when resolving a
+   *   single document's full deadline detail, where the extra fetch cost
+   *   is worth it and won't compound across dozens of documents.
    */
   async deadlinesQuery(
     celexId: string,
     language: string,
+    includeContext = false,
   ): Promise<{
     celex_id: string;
     date_entry_into_force: string;
@@ -859,7 +867,27 @@ export class CellarClient {
       };
     }
 
-    // Fetch the document text once, only because we have deadlines to resolve.
+    // List-view mode: skip the document fetch entirely, return bare dates.
+    if (!includeContext) {
+      const bareDeadlines: DeadlineEntry[] = rawDeadlines
+        .map((raw) => ({
+          date: raw.date,
+          comment: raw.comment,
+          article_ref: null,
+          context: null,
+        }))
+        .sort((a, b) => a.date.localeCompare(b.date));
+
+      return {
+        celex_id: celexId,
+        date_entry_into_force: dateForce,
+        date_transposition: dateTrans,
+        deadlines: bareDeadlines,
+        eurlex_url: `${EURLEX_BASE}/${httpLang}/TXT/?uri=CELEX:${celexId}`,
+      };
+    }
+
+    // Detail-view mode: fetch the document text once and resolve article context.
     let plainText: string | null = null;
     try {
       const html = await this.fetchDocument(celexId, language);
