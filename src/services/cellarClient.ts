@@ -102,6 +102,14 @@ interface DeadlinesSparqlResponse {
   };
 }
 
+/** A single resolved compliance deadline, enriched with article context */
+export interface DeadlineEntry {
+  date: string; // ISO date, e.g. "2019-03-24"
+  comment: string; // original rdfs:comment from SPARQL (usually empty)
+  article_ref: string | null; // e.g. "Article 20", or null if no article found
+  context: string | null; // extracted raw article text, or null if not found
+}
+
 /**
  * Escapes a string for safe inclusion in a SPARQL literal.
  * Escapes backslashes and double-quotes.
@@ -114,6 +122,91 @@ export function escapeSparqlString(input: string): string {
     .replace(/\r/g, '\\r')
     .replace(/\t/g, '\\t')
     .replace(/\0/g, '');
+}
+
+/**
+ * Converts an ISO date (YYYY-MM-DD) into the human-readable format
+ * used in EUR-Lex document text, e.g. "2019-03-24" -> "24 March 2019".
+ */
+export function isoToHumanDate(isoDate: string): string | null {
+  const parts = isoDate.split('-').map(Number);
+  if (parts.length !== 3 || parts.some((n) => Number.isNaN(n))) return null;
+  const [year, month, day] = parts;
+  const months = [
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+  if (month < 1 || month > 12) return null;
+  return `${day} ${months[month - 1]} ${year}`;
+}
+
+/**
+ * Given the full plain-text of a legal document and a target date
+ * (in human-readable form, e.g. "24 March 2019"), finds every
+ * occurrence of that date and extracts the nearest preceding
+ * "Article N" heading plus the text up to the next Article heading.
+ *
+ * Returns one entry per occurrence, since the same date can appear
+ * under multiple distinct articles (e.g. two separate obligations
+ * that both fall due on the same date).
+ */
+export function extractArticleContexts(
+  plainText: string,
+  humanDate: string,
+  maxSnippetLength = 500,
+): { article_ref: string; context: string }[] {
+  const results: { article_ref: string; context: string }[] = [];
+  let searchFrom = 0;
+
+  while (true) {
+    const idx = plainText.indexOf(humanDate, searchFrom);
+    if (idx === -1) break;
+
+    const textBefore = plainText.slice(0, idx);
+    const articleMatches = [...textBefore.matchAll(/Article\s+(\d+)/g)];
+    const nearestArticle =
+      articleMatches.length > 0 ? articleMatches[articleMatches.length - 1] : null;
+
+    if (nearestArticle && typeof nearestArticle.index === 'number') {
+      const articleNum = nearestArticle[1];
+      const articleStart = nearestArticle.index;
+
+      // Find the next "Article N" heading after this one, to bound the snippet.
+      const textAfterArticleStart = plainText.slice(articleStart);
+      const nextArticleMatch = textAfterArticleStart.slice(20).match(/Article\s+\d+/);
+      const articleEnd =
+        nextArticleMatch && typeof nextArticleMatch.index === 'number'
+          ? articleStart + 20 + nextArticleMatch.index
+          : Math.min(articleStart + maxSnippetLength * 3, plainText.length);
+
+      const rawSnippet = plainText.slice(articleStart, articleEnd).replace(/\s+/g, ' ').trim();
+      const snippet =
+        rawSnippet.length > maxSnippetLength
+          ? rawSnippet.slice(0, maxSnippetLength) + '...'
+          : rawSnippet;
+
+      const isDuplicate = results.some(
+        (r) => r.article_ref === `Article ${articleNum}` && r.context === snippet,
+      );
+      if (!isDuplicate) {
+        results.push({ article_ref: `Article ${articleNum}`, context: snippet });
+      }
+    }
+
+    searchFrom = idx + humanDate.length;
+  }
+
+  return results;
 }
 
 export class CellarClient {
@@ -704,8 +797,18 @@ export class CellarClient {
   }
 
   /**
-   * Fetches all compliance deadlines for a CELEX ID.
-   * Returns entry into force, transposition deadline, and all application deadlines.
+   * Fetches all compliance deadlines for a CELEX ID, enriched with the
+   * article text each deadline actually refers to.
+   *
+   * For each deadline date returned by SPARQL, this fetches the full
+   * document text once and searches for the human-readable form of
+   * that date, extracting the nearest "Article N" context. If a date
+   * appears under multiple distinct articles, each is returned as a
+   * separate deadline entry.
+   *
+   * Falls back gracefully (article_ref/context = null) if the document
+   * text can't be fetched or the date can't be located in it — the
+   * bare date is still returned so the feature degrades, not breaks.
    */
   async deadlinesQuery(
     celexId: string,
@@ -714,7 +817,7 @@ export class CellarClient {
     celex_id: string;
     date_entry_into_force: string;
     date_transposition: string;
-    deadlines: { date: string; comment: string }[];
+    deadlines: DeadlineEntry[];
     eurlex_url: string;
   }> {
     const sparql = this.buildDeadlinesQuery(celexId);
@@ -731,17 +834,78 @@ export class CellarClient {
     const dateForce = first.dateForce?.value ?? '';
     const dateTrans = first.dateTrans?.value ?? '';
 
-    // Collect all unique deadlines and sort chronologically
+    // Collect all unique raw deadline dates first
     const seen = new Set<string>();
-    const deadlines: { date: string; comment: string }[] = [];
+    const rawDeadlines: { date: string; comment: string }[] = [];
 
     for (const b of bindings) {
       if (b.deadline?.value && !seen.has(b.deadline.value)) {
         seen.add(b.deadline.value);
-        deadlines.push({
+        rawDeadlines.push({
           date: b.deadline.value,
           comment: b.deadlineComment?.value ?? '',
         });
+      }
+    }
+
+    // If there are no deadlines at all, skip the document fetch entirely.
+    if (rawDeadlines.length === 0) {
+      return {
+        celex_id: celexId,
+        date_entry_into_force: dateForce,
+        date_transposition: dateTrans,
+        deadlines: [],
+        eurlex_url: `${EURLEX_BASE}/${httpLang}/TXT/?uri=CELEX:${celexId}`,
+      };
+    }
+
+    // Fetch the document text once, only because we have deadlines to resolve.
+    let plainText: string | null = null;
+    try {
+      const html = await this.fetchDocument(celexId, language);
+      plainText = html.replace(/<[^>]+>/g, ' ');
+    } catch {
+      // If the document can't be fetched (e.g. PDF-only, 404), plainText
+      // stays null (its initial value) and we return the bare dates below
+      // with article_ref/context set to null.
+    }
+
+    const deadlines: DeadlineEntry[] = [];
+
+    for (const raw of rawDeadlines) {
+      const humanDate = isoToHumanDate(raw.date);
+
+      if (!plainText || !humanDate) {
+        deadlines.push({
+          date: raw.date,
+          comment: raw.comment,
+          article_ref: null,
+          context: null,
+        });
+        continue;
+      }
+
+      const contexts = extractArticleContexts(plainText, humanDate);
+
+      if (contexts.length === 0) {
+        // Date exists in metadata but wasn't found in the document text
+        // (e.g. different date format used, or date only appears in an annex/table).
+        deadlines.push({
+          date: raw.date,
+          comment: raw.comment,
+          article_ref: null,
+          context: null,
+        });
+      } else {
+        // One deadline entry per distinct article that references this date.
+        for (const ctx of contexts) {
+          deadlines.push({
+            date: raw.date,
+            comment: raw.comment,
+            article_ref: ctx.article_ref,
+            context: ctx.context,
+          });
+        }
       }
     }
 
