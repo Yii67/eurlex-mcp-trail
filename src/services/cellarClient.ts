@@ -892,7 +892,9 @@ export class CellarClient {
     try {
       const html = await this.fetchDocument(celexId, language);
       plainText = html.replace(/<[^>]+>/g, ' ');
-    } catch {
+    } catch (err) {
+      // TEMPORARY DEBUG LOGGING — remove once root cause is confirmed.
+      console.error(`[deadlinesQuery] fetchDocument failed for ${celexId}:`, err);
       // If the document can't be fetched (e.g. PDF-only, 404), plainText
       // stays null (its initial value) and we return the bare dates below
       // with article_ref/context set to null.
