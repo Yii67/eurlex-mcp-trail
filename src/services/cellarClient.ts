@@ -891,10 +891,14 @@ export class CellarClient {
     let plainText: string | null = null;
     try {
       const html = await this.fetchDocument(celexId, language);
-      plainText = html.replace(/<[^>]+>/g, ' ');
-    } catch (err) {
-      // TEMPORARY DEBUG LOGGING — remove once root cause is confirmed.
-      console.error(`[deadlinesQuery] fetchDocument failed for ${celexId}:`, err);
+      plainText = html
+        .replace(/<[^>]+>/g, ' ')
+        // Normalize non-breaking spaces and similar unicode whitespace to regular
+        // spaces — EU legal documents often use \u00A0 inside dates (e.g. between
+        // day and month) to prevent line-break splitting, which otherwise never
+        // matches a plain " " in our search strings.
+        .replace(/[\u00A0\u2000-\u200B\u202F\u205F\u3000]/g, ' ');
+    } catch {
       // If the document can't be fetched (e.g. PDF-only, 404), plainText
       // stays null (its initial value) and we return the bare dates below
       // with article_ref/context set to null.
