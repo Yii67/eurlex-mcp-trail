@@ -108,34 +108,6 @@ export interface DeadlineEntry {
   comment: string; // original rdfs:comment from SPARQL (usually empty)
   article_ref: string | null; // e.g. "Article 20", or null if no article found
   context: string | null; // extracted raw article text, or null if not found
-  nature: string | null; // category of obligation, e.g. "Reporting", "Review", "Entry into force"
-}
-
-/**
- * Classifies what kind of obligation a deadline represents, based on keywords
- * in its surrounding article text. This gives every time point a labeled
- * "nature" (Reporting, Review, Transposition, etc.) even when we can't (or
- * choose not to) show the full article text — useful both as a quick badge
- * next to matched deadlines and, in principle, for any future case where we
- * find a date's rough location without pinning down its exact article.
- * Returns null if no recognizable pattern matches — callers should treat
- * that as "unclassified", not "definitely none of these".
- */
-function classifyDeadlineNature(context: string): string | null {
-  const lower = context.toLowerCase();
-
-  if (/\breport(ing)?\b/.test(lower)) return 'Reporting obligation';
-  if (/\breview\b|\bevaluat/.test(lower)) return 'Review';
-  if (/\btranspos/.test(lower)) return 'Transposition';
-  if (/\bshall apply\b|\bshall become applicable\b|\bapplication\b/.test(lower))
-    return 'Application date';
-  if (/\bnotify\b|\bnotification\b|\binform(s|ed)? the commission\b/.test(lower))
-    return 'Notification';
-  if (/\bpenalt/.test(lower)) return 'Penalties';
-  if (/\bdelegat/.test(lower)) return 'Delegated powers';
-  if (/\bcomplaint/.test(lower)) return 'Complaint handling';
-
-  return null;
 }
 
 /**
@@ -188,7 +160,6 @@ export interface RecurringYearRange {
   endYear: number;
   article_ref: string;
   context: string;
-  nature: string | null;
 }
 
 const MONTH_NAMES = [
@@ -315,7 +286,6 @@ export function extractRecurringYearRanges(plainText: string): RecurringYearRang
       endYear,
       article_ref: `Article ${articleNum}`,
       context,
-      nature: classifyDeadlineNature(context),
     });
   }
 
@@ -383,8 +353,8 @@ export function extractArticleContexts(
   plainText: string,
   humanDate: string,
   maxSnippetLength = 500,
-): { article_ref: string; context: string; nature: string | null }[] {
-  const results: { article_ref: string; context: string; nature: string | null }[] = [];
+): { article_ref: string; context: string }[] {
+  const results: { article_ref: string; context: string }[] = [];
   const headings = findArticleHeadings(plainText);
   let searchFrom = 0;
 
@@ -426,11 +396,7 @@ export function extractArticleContexts(
         (r) => r.article_ref === articleRef && r.context === snippet,
       );
       if (!isDuplicate) {
-        results.push({
-          article_ref: articleRef,
-          context: snippet,
-          nature: classifyDeadlineNature(snippet),
-        });
+        results.push({ article_ref: articleRef, context: snippet });
       }
     }
 
@@ -442,7 +408,7 @@ export function extractArticleContexts(
 
 /**
  * Turns the document's structural dates (entry into force, transposition
- * deadline) into explicit DeadlineEntry rows, so the "nature" of a time
+ * deadline) into explicit DeadlineEntry rows, so the type of a time
  * point is visible in the UI rather than being a silent, separate field.
  * Skips a date that's already present among the article-level deadlines,
  * to avoid showing the same date twice with different labels.
@@ -456,13 +422,7 @@ function synthesizeStructuralDeadlines(
   const existingDates = new Set(existing.map((d) => d.date));
 
   if (dateForce && !existingDates.has(dateForce)) {
-    extra.push({
-      date: dateForce,
-      comment: 'Entry into force',
-      article_ref: null,
-      context: null,
-      nature: 'Entry into force',
-    });
+    extra.push({ date: dateForce, comment: 'Entry into force', article_ref: null, context: null });
     existingDates.add(dateForce);
   }
   if (dateTrans && !existingDates.has(dateTrans)) {
@@ -471,7 +431,6 @@ function synthesizeStructuralDeadlines(
       comment: 'Transposition deadline',
       article_ref: null,
       context: null,
-      nature: 'Transposition',
     });
     existingDates.add(dateTrans);
   }
@@ -1145,7 +1104,6 @@ export class CellarClient {
         comment: raw.comment,
         article_ref: null,
         context: null,
-        nature: raw.comment ? classifyDeadlineNature(raw.comment) : null,
       }));
       const structural = synthesizeStructuralDeadlines(dateForce, dateTrans, bareDeadlines);
       const allDeadlines = [...structural, ...bareDeadlines].sort((a, b) =>
@@ -1195,7 +1153,6 @@ export class CellarClient {
           comment: raw.comment,
           article_ref: null,
           context: null,
-          nature: raw.comment ? classifyDeadlineNature(raw.comment) : null,
         });
         continue;
       }
@@ -1216,7 +1173,6 @@ export class CellarClient {
             comment: raw.comment,
             article_ref: matchingRange.article_ref,
             context: matchingRange.context,
-            nature: matchingRange.nature,
           });
         } else {
           // Genuinely not found anywhere in the document text — either a
@@ -1228,7 +1184,6 @@ export class CellarClient {
             comment: raw.comment,
             article_ref: null,
             context: null,
-            nature: raw.comment ? classifyDeadlineNature(raw.comment) : null,
           });
         }
       } else {
@@ -1239,7 +1194,6 @@ export class CellarClient {
             comment: raw.comment,
             article_ref: ctx.article_ref,
             context: ctx.context,
-            nature: ctx.nature,
           });
         }
       }
