@@ -150,6 +150,195 @@ export function isoToHumanDate(isoDate: string): string | null {
   return `${day} ${months[month - 1]} ${year}`;
 }
 
+/** A recurring annual obligation detected in the document text, e.g.
+ * "by 31 May 2016, and by 31 May of each subsequent year up to and
+ * including 2023" — covers one date-of-year across a range of years. */
+export interface RecurringYearRange {
+  day: number;
+  month: number; // 1-12
+  startYear: number;
+  endYear: number;
+  article_ref: string;
+  context: string;
+}
+
+const MONTH_NAMES = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+/**
+ * Scans the full document once for every genuine "Article N" heading,
+ * filtering out matches that are actually inline citations rather than
+ * section headings.
+ *
+ * EU legal text is full of cross-references like "Article 4 of Directive
+ * 2009/45/EC" (citing another act entirely) or "Article 4(2)" (citing a
+ * specific paragraph). Both patterns match a naive /Article\s+(\d+)/ regex
+ * just as well as a real heading like "Article 4 \n Scope \n ...". Genuine
+ * headings are never immediately followed by "(" or "of" — only citations
+ * are — so filtering on the text right after each match reliably tells
+ * the two apart.
+ *
+ * Computing this list once per document (rather than re-scanning per date
+ * occurrence) also lets both the "nearest preceding heading" and "nearest
+ * following heading" lookups share the same filtered, correct data — a
+ * previous version only filtered the backward search, which let citations
+ * still corrupt the forward "where does this Article end" boundary.
+ */
+function findArticleHeadings(plainText: string): { num: string; index: number }[] {
+  const headings: { num: string; index: number }[] = [];
+
+  for (const match of plainText.matchAll(/Article\s+(\d+)/g)) {
+    if (typeof match.index !== 'number') continue;
+
+    const afterMatch = plainText.slice(
+      match.index + match[0].length,
+      match.index + match[0].length + 6,
+    );
+    const isCitation = /^\s*(\(|of\b)/i.test(afterMatch);
+
+    if (!isCitation) {
+      headings.push({ num: match[1], index: match.index });
+    }
+  }
+
+  return headings;
+}
+
+/** Nearest genuine Article heading at or before `index`, or null if none. */
+function nearestHeadingBefore(
+  headings: { num: string; index: number }[],
+  index: number,
+): { num: string; index: number } | null {
+  let result: { num: string; index: number } | null = null;
+  for (const h of headings) {
+    if (h.index < index) result = h;
+    else break;
+  }
+  return result;
+}
+
+/** Nearest genuine Article heading strictly after `index`, or null if none. */
+function nearestHeadingAfter(
+  headings: { num: string; index: number }[],
+  index: number,
+): { num: string; index: number } | null {
+  for (const h of headings) {
+    if (h.index > index) return h;
+  }
+  return null;
+}
+
+/**
+ * Scans the full document text for EU legal drafting's common recurring-
+ * deadline phrasing — "by D Month YYYY, and by D Month of each subsequent
+ * year up to and including YYYY" — and expands each match into a
+ * day/month/year-range record. This covers deadlines that Cellar's SPARQL
+ * metadata expands into individual yearly dates, even though the document
+ * text only states the pattern once rather than spelling out every year.
+ */
+export function extractRecurringYearRanges(plainText: string): RecurringYearRange[] {
+  const ranges: RecurringYearRange[] = [];
+  const headings = findArticleHeadings(plainText);
+  const monthPattern = MONTH_NAMES.join('|');
+  const regex = new RegExp(
+    `by\\s+(\\d{1,2})\\s+(${monthPattern})\\s+(\\d{4}),?\\s+and\\s+by\\s+\\1\\s+\\2\\s+of\\s+each\\s+subsequent\\s+year\\s+up\\s+to\\s+and\\s+including\\s+(\\d{4})`,
+    'gi',
+  );
+
+  for (const match of plainText.matchAll(regex)) {
+    if (typeof match.index !== 'number') continue;
+
+    const day = parseInt(match[1], 10);
+    const monthIdx = MONTH_NAMES.findIndex((m) => m.toLowerCase() === match[2].toLowerCase());
+    if (monthIdx === -1) continue;
+    const startYear = parseInt(match[3], 10);
+    const endYear = parseInt(match[4], 10);
+
+    const nearestArticle = nearestHeadingBefore(headings, match.index);
+    if (!nearestArticle) continue;
+
+    const articleNum = nearestArticle.num;
+    const articleStart = nearestArticle.index;
+    const nextArticle = nearestHeadingAfter(headings, articleStart);
+    const articleEnd = nextArticle
+      ? nextArticle.index
+      : Math.min(articleStart + 1500, plainText.length);
+
+    const rawSnippet = plainText.slice(articleStart, articleEnd).replace(/\s+/g, ' ').trim();
+    const context = rawSnippet.length > 500 ? rawSnippet.slice(0, 500) + '...' : rawSnippet;
+
+    ranges.push({
+      day,
+      month: monthIdx + 1,
+      startYear,
+      endYear,
+      article_ref: `Article ${articleNum}`,
+      context,
+    });
+  }
+
+  return ranges;
+}
+
+/**
+ * Given the span of text belonging to one Article (from its heading to the
+ * next Article heading, or document end), finds which numbered paragraph
+ * (e.g. "4." in "Article 1", giving "Article 1.4") contains `targetIndex`.
+ *
+ * EU legal articles are almost always broken into numbered paragraphs like
+ * "1.   The managing body..." / "2.   The handling of complaints..." — the
+ * original XHTML indentation survives tag-stripping as a run of 2+ spaces
+ * after the number, which reliably distinguishes a paragraph marker from a
+ * date, a citation like "Article 4(2)", or a stray number in running text.
+ *
+ * Returns null if the article has no detectable numbered paragraphs (e.g.
+ * a short, single-paragraph article) — callers should fall back to citing
+ * just the Article as a whole in that case.
+ */
+function findParagraphNumber(
+  plainText: string,
+  articleStart: number,
+  articleEnd: number,
+  targetIndex: number,
+): { num: string; start: number; end: number } | null {
+  const articleText = plainText.slice(articleStart, articleEnd);
+  const paraRegex = /(\d{1,2})\.\s{2,}/g;
+
+  const paragraphs: { num: string; start: number }[] = [];
+  for (const m of articleText.matchAll(paraRegex)) {
+    if (typeof m.index === 'number') {
+      paragraphs.push({ num: m[1], start: articleStart + m.index });
+    }
+  }
+
+  if (paragraphs.length === 0) return null;
+
+  let matched: { num: string; start: number } | null = null;
+  for (const p of paragraphs) {
+    if (p.start <= targetIndex) matched = p;
+    else break;
+  }
+  if (!matched) return null;
+
+  const matchedPos = paragraphs.indexOf(matched);
+  const next = paragraphs[matchedPos + 1];
+  const end = next ? next.start : articleEnd;
+
+  return { num: matched.num, start: matched.start, end };
+}
+
 /**
  * Given the full plain-text of a legal document and a target date
  * (in human-readable form, e.g. "24 March 2019"), finds every
@@ -166,40 +355,48 @@ export function extractArticleContexts(
   maxSnippetLength = 500,
 ): { article_ref: string; context: string }[] {
   const results: { article_ref: string; context: string }[] = [];
+  const headings = findArticleHeadings(plainText);
   let searchFrom = 0;
 
   while (true) {
     const idx = plainText.indexOf(humanDate, searchFrom);
     if (idx === -1) break;
 
-    const textBefore = plainText.slice(0, idx);
-    const articleMatches = [...textBefore.matchAll(/Article\s+(\d+)/g)];
-    const nearestArticle =
-      articleMatches.length > 0 ? articleMatches[articleMatches.length - 1] : null;
+    const nearestArticle = nearestHeadingBefore(headings, idx);
 
-    if (nearestArticle && typeof nearestArticle.index === 'number') {
-      const articleNum = nearestArticle[1];
+    if (nearestArticle) {
+      const articleNum = nearestArticle.num;
       const articleStart = nearestArticle.index;
 
-      // Find the next "Article N" heading after this one, to bound the snippet.
-      const textAfterArticleStart = plainText.slice(articleStart);
-      const nextArticleMatch = textAfterArticleStart.slice(20).match(/Article\s+\d+/);
-      const articleEnd =
-        nextArticleMatch && typeof nextArticleMatch.index === 'number'
-          ? articleStart + 20 + nextArticleMatch.index
-          : Math.min(articleStart + maxSnippetLength * 3, plainText.length);
+      // Bound the article's span using the next genuine heading (citation-filtered
+      // the same way as the backward search — a citation like "Article 4 of
+      // Directive..." inside this article's own body must not be mistaken for
+      // where the article ends).
+      const nextArticle = nearestHeadingAfter(headings, articleStart);
+      const articleEnd = nextArticle
+        ? nextArticle.index
+        : Math.min(articleStart + maxSnippetLength * 3, plainText.length);
 
-      const rawSnippet = plainText.slice(articleStart, articleEnd).replace(/\s+/g, ' ').trim();
+      // Try to narrow further to the specific numbered paragraph the date falls under.
+      const paragraph = findParagraphNumber(plainText, articleStart, articleEnd, idx);
+
+      const articleRef = paragraph
+        ? `Article ${articleNum}.${paragraph.num}`
+        : `Article ${articleNum}`;
+      const snippetStart = paragraph ? paragraph.start : articleStart;
+      const snippetEnd = paragraph ? paragraph.end : articleEnd;
+
+      const rawSnippet = plainText.slice(snippetStart, snippetEnd).replace(/\s+/g, ' ').trim();
       const snippet =
         rawSnippet.length > maxSnippetLength
           ? rawSnippet.slice(0, maxSnippetLength) + '...'
           : rawSnippet;
 
       const isDuplicate = results.some(
-        (r) => r.article_ref === `Article ${articleNum}` && r.context === snippet,
+        (r) => r.article_ref === articleRef && r.context === snippet,
       );
       if (!isDuplicate) {
-        results.push({ article_ref: `Article ${articleNum}`, context: snippet });
+        results.push({ article_ref: articleRef, context: snippet });
       }
     }
 
@@ -207,6 +404,38 @@ export function extractArticleContexts(
   }
 
   return results;
+}
+
+/**
+ * Turns the document's structural dates (entry into force, transposition
+ * deadline) into explicit DeadlineEntry rows, so the "nature" of a time
+ * point is visible in the UI rather than being a silent, separate field.
+ * Skips a date that's already present among the article-level deadlines,
+ * to avoid showing the same date twice with different labels.
+ */
+function synthesizeStructuralDeadlines(
+  dateForce: string,
+  dateTrans: string,
+  existing: DeadlineEntry[],
+): DeadlineEntry[] {
+  const extra: DeadlineEntry[] = [];
+  const existingDates = new Set(existing.map((d) => d.date));
+
+  if (dateForce && !existingDates.has(dateForce)) {
+    extra.push({ date: dateForce, comment: 'Entry into force', article_ref: null, context: null });
+    existingDates.add(dateForce);
+  }
+  if (dateTrans && !existingDates.has(dateTrans)) {
+    extra.push({
+      date: dateTrans,
+      comment: 'Transposition deadline',
+      article_ref: null,
+      context: null,
+    });
+    existingDates.add(dateTrans);
+  }
+
+  return extra;
 }
 
 export class CellarClient {
@@ -858,31 +1087,34 @@ export class CellarClient {
 
     // If there are no deadlines at all, skip the document fetch entirely.
     if (rawDeadlines.length === 0) {
+      const structural = synthesizeStructuralDeadlines(dateForce, dateTrans, []);
       return {
         celex_id: celexId,
         date_entry_into_force: dateForce,
         date_transposition: dateTrans,
-        deadlines: [],
+        deadlines: structural.sort((a, b) => a.date.localeCompare(b.date)),
         eurlex_url: `${EURLEX_BASE}/${httpLang}/TXT/?uri=CELEX:${celexId}`,
       };
     }
 
     // List-view mode: skip the document fetch entirely, return bare dates.
     if (!includeContext) {
-      const bareDeadlines: DeadlineEntry[] = rawDeadlines
-        .map((raw) => ({
-          date: raw.date,
-          comment: raw.comment,
-          article_ref: null,
-          context: null,
-        }))
-        .sort((a, b) => a.date.localeCompare(b.date));
+      const bareDeadlines: DeadlineEntry[] = rawDeadlines.map((raw) => ({
+        date: raw.date,
+        comment: raw.comment,
+        article_ref: null,
+        context: null,
+      }));
+      const structural = synthesizeStructuralDeadlines(dateForce, dateTrans, bareDeadlines);
+      const allDeadlines = [...structural, ...bareDeadlines].sort((a, b) =>
+        a.date.localeCompare(b.date),
+      );
 
       return {
         celex_id: celexId,
         date_entry_into_force: dateForce,
         date_transposition: dateTrans,
-        deadlines: bareDeadlines,
+        deadlines: allDeadlines,
         eurlex_url: `${EURLEX_BASE}/${httpLang}/TXT/?uri=CELEX:${celexId}`,
       };
     }
@@ -906,6 +1138,12 @@ export class CellarClient {
 
     const deadlines: DeadlineEntry[] = [];
 
+    // Detect recurring annual obligations once per document (e.g. "by 31 May 2016,
+    // and by 31 May of each subsequent year up to and including 2023") — these cover
+    // deadlines that Cellar expands into individual yearly dates even though the
+    // document text only states the pattern once.
+    const recurringRanges = plainText ? extractRecurringYearRanges(plainText) : [];
+
     for (const raw of rawDeadlines) {
       const humanDate = isoToHumanDate(raw.date);
 
@@ -922,14 +1160,32 @@ export class CellarClient {
       const contexts = extractArticleContexts(plainText, humanDate);
 
       if (contexts.length === 0) {
-        // Date exists in metadata but wasn't found in the document text
-        // (e.g. different date format used, or date only appears in an annex/table).
-        deadlines.push({
-          date: raw.date,
-          comment: raw.comment,
-          article_ref: null,
-          context: null,
-        });
+        // No exact match for this date's literal text. Check whether it falls
+        // within a detected recurring-annual-obligation range instead.
+        const [y, m, d] = raw.date.split('-').map(Number);
+        const matchingRange = recurringRanges.find(
+          (r) => r.day === d && r.month === m && y >= r.startYear && y <= r.endYear,
+        );
+
+        if (matchingRange) {
+          deadlines.push({
+            date: raw.date,
+            comment: raw.comment,
+            article_ref: matchingRange.article_ref,
+            context: matchingRange.context,
+          });
+        } else {
+          // Genuinely not found anywhere in the document text — either a
+          // different date format was used, or the date only appears in an
+          // annex/table, or (rarer) it's a metadata-computed date that the
+          // document itself never states as literal text.
+          deadlines.push({
+            date: raw.date,
+            comment: raw.comment,
+            article_ref: null,
+            context: null,
+          });
+        }
       } else {
         // One deadline entry per distinct article that references this date.
         for (const ctx of contexts) {
@@ -943,13 +1199,14 @@ export class CellarClient {
       }
     }
 
-    deadlines.sort((a, b) => a.date.localeCompare(b.date));
+    const structural = synthesizeStructuralDeadlines(dateForce, dateTrans, deadlines);
+    const allDeadlines = [...structural, ...deadlines].sort((a, b) => a.date.localeCompare(b.date));
 
     return {
       celex_id: celexId,
       date_entry_into_force: dateForce,
       date_transposition: dateTrans,
-      deadlines,
+      deadlines: allDeadlines,
       eurlex_url: `${EURLEX_BASE}/${httpLang}/TXT/?uri=CELEX:${celexId}`,
     };
   }
