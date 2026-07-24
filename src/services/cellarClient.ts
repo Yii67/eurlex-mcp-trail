@@ -96,6 +96,7 @@ interface DeadlinesSparqlResponse {
     bindings: {
       dateForce?: SparqlBindingValue;
       dateTrans?: SparqlBindingValue;
+      dateEnd?: SparqlBindingValue;
       deadline?: SparqlBindingValue;
       deadlineComment?: SparqlBindingValue;
     }[];
@@ -416,6 +417,7 @@ export function extractArticleContexts(
 function synthesizeStructuralDeadlines(
   dateForce: string,
   dateTrans: string,
+  dateEnd: string,
   existing: DeadlineEntry[],
 ): DeadlineEntry[] {
   const extra: DeadlineEntry[] = [];
@@ -433,6 +435,10 @@ function synthesizeStructuralDeadlines(
       context: null,
     });
     existingDates.add(dateTrans);
+  }
+  if (dateEnd && !existingDates.has(dateEnd)) {
+    extra.push({ date: dateEnd, comment: 'End of validity', article_ref: null, context: null });
+    existingDates.add(dateEnd);
   }
 
   return extra;
@@ -1012,11 +1018,12 @@ export class CellarClient {
       'PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>',
       'PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>',
       '',
-      'SELECT DISTINCT ?dateForce ?dateTrans ?deadline ?deadlineComment WHERE {',
+      'SELECT DISTINCT ?dateForce ?dateTrans ?dateEnd ?deadline ?deadlineComment WHERE {',
       `  ?work cdm:resource_legal_id_celex ?celexVal .`,
       `  FILTER(STR(?celexVal) = "${escaped}")`,
       '  OPTIONAL { ?work cdm:resource_legal_date_entry-into-force ?dateForce . }',
       '  OPTIONAL { ?work cdm:resource_legal_date_transposition ?dateTrans . }',
+      '  OPTIONAL { ?work cdm:resource_legal_date_end-of-validity ?dateEnd . }',
       '  OPTIONAL {',
       '    ?work cdm:resource_legal_date_deadline ?deadline .',
       '    OPTIONAL { ?deadline rdfs:comment ?deadlineComment . }',
@@ -1070,6 +1077,7 @@ export class CellarClient {
     const first = bindings[0];
     const dateForce = first.dateForce?.value ?? '';
     const dateTrans = first.dateTrans?.value ?? '';
+    const dateEnd = first.dateEnd?.value ?? '';
 
     // Collect all unique raw deadline dates first
     const seen = new Set<string>();
@@ -1087,7 +1095,7 @@ export class CellarClient {
 
     // If there are no deadlines at all, skip the document fetch entirely.
     if (rawDeadlines.length === 0) {
-      const structural = synthesizeStructuralDeadlines(dateForce, dateTrans, []);
+      const structural = synthesizeStructuralDeadlines(dateForce, dateTrans, dateEnd, []);
       return {
         celex_id: celexId,
         date_entry_into_force: dateForce,
@@ -1105,7 +1113,12 @@ export class CellarClient {
         article_ref: null,
         context: null,
       }));
-      const structural = synthesizeStructuralDeadlines(dateForce, dateTrans, bareDeadlines);
+      const structural = synthesizeStructuralDeadlines(
+        dateForce,
+        dateTrans,
+        dateEnd,
+        bareDeadlines,
+      );
       const allDeadlines = [...structural, ...bareDeadlines].sort((a, b) =>
         a.date.localeCompare(b.date),
       );
@@ -1199,7 +1212,7 @@ export class CellarClient {
       }
     }
 
-    const structural = synthesizeStructuralDeadlines(dateForce, dateTrans, deadlines);
+    const structural = synthesizeStructuralDeadlines(dateForce, dateTrans, dateEnd, deadlines);
     const allDeadlines = [...structural, ...deadlines].sort((a, b) => a.date.localeCompare(b.date));
 
     return {
