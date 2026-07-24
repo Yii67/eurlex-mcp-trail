@@ -1076,6 +1076,7 @@ export class CellarClient {
     celex_id: string;
     date_entry_into_force: string;
     date_transposition: string;
+    date_end_of_validity: string;
     deadlines: DeadlineEntry[];
     eurlex_url: string;
   }> {
