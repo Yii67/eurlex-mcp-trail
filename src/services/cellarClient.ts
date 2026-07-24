@@ -414,6 +414,17 @@ export function extractArticleContexts(
  * Skips a date that's already present among the article-level deadlines,
  * to avoid showing the same date twice with different labels.
  */
+// Cellar uses 9999-12-31 as a sentinel meaning "no end date / still in
+// force indefinitely" rather than leaving the field empty. Displays a
+// human-readable "No end date" in that case, matching how EUR-Lex itself
+// labels it, instead of showing a fake date or nothing at all.
+const NO_END_DATE_SENTINEL = '9999-12-31';
+function formatEndOfValidity(dateEnd: string): string {
+  if (!dateEnd) return '';
+  if (dateEnd === NO_END_DATE_SENTINEL) return 'No end date';
+  return dateEnd;
+}
+
 function synthesizeStructuralDeadlines(
   dateForce: string,
   dateTrans: string,
@@ -436,7 +447,11 @@ function synthesizeStructuralDeadlines(
     });
     existingDates.add(dateTrans);
   }
-  if (dateEnd && !existingDates.has(dateEnd)) {
+  // Cellar uses 9999-12-31 as a sentinel meaning "no end date / still in
+  // force indefinitely" rather than leaving the field empty. Skip adding it
+  // as a timeline entry here — it isn't a real date, and is surfaced
+  // separately as a "No end date" label (see formatEndOfValidity).
+  if (dateEnd && dateEnd !== NO_END_DATE_SENTINEL && !existingDates.has(dateEnd)) {
     extra.push({ date: dateEnd, comment: 'End of validity', article_ref: null, context: null });
     existingDates.add(dateEnd);
   }
@@ -1100,6 +1115,7 @@ export class CellarClient {
         celex_id: celexId,
         date_entry_into_force: dateForce,
         date_transposition: dateTrans,
+        date_end_of_validity: formatEndOfValidity(dateEnd),
         deadlines: structural.sort((a, b) => a.date.localeCompare(b.date)),
         eurlex_url: `${EURLEX_BASE}/${httpLang}/TXT/?uri=CELEX:${celexId}`,
       };
@@ -1127,6 +1143,7 @@ export class CellarClient {
         celex_id: celexId,
         date_entry_into_force: dateForce,
         date_transposition: dateTrans,
+        date_end_of_validity: formatEndOfValidity(dateEnd),
         deadlines: allDeadlines,
         eurlex_url: `${EURLEX_BASE}/${httpLang}/TXT/?uri=CELEX:${celexId}`,
       };
@@ -1218,6 +1235,7 @@ export class CellarClient {
     return {
       celex_id: celexId,
       date_entry_into_force: dateForce,
+      date_end_of_validity: formatEndOfValidity(dateEnd),
       date_transposition: dateTrans,
       deadlines: allDeadlines,
       eurlex_url: `${EURLEX_BASE}/${httpLang}/TXT/?uri=CELEX:${celexId}`,
