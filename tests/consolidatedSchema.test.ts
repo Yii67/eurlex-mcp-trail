@@ -29,8 +29,8 @@ describe('consolidatedSchema', () => {
     expect(() => consolidatedSchema.parse({ doc_type: 'reg', year: 2024, number: 1, max_chars: 999 })).toThrow()
   })
 
-  it('rejects max_chars above 50000', () => {
-    expect(() => consolidatedSchema.parse({ doc_type: 'reg', year: 2024, number: 1, max_chars: 50001 })).toThrow()
+  it('rejects max_chars above 200000', () => {
+    expect(() => consolidatedSchema.parse({ doc_type: 'reg', year: 2024, number: 1, max_chars: 200001 })).toThrow()
   })
 
   it('rejects unknown format', () => {

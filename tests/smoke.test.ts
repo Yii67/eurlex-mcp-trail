@@ -53,10 +53,10 @@ describe('Phase 5 – Smoke Tests', () => {
     pairs.push(pair)
 
     const { tools } = await pair.client.listTools()
-    expect(tools).toHaveLength(6)
+    expect(tools).toHaveLength(7)
 
     const toolNames = tools.map((t) => t.name).sort()
-    expect(toolNames).toEqual(['eurlex_by_eurovoc', 'eurlex_citations', 'eurlex_consolidated', 'eurlex_fetch', 'eurlex_metadata', 'eurlex_search'])
+    expect(toolNames).toEqual(['eurlex_by_eurovoc', 'eurlex_citations', 'eurlex_consolidated', 'eurlex_deadlines', 'eurlex_fetch', 'eurlex_metadata', 'eurlex_search'])
   })
 
   // V20: Session-Management → factory creates independent servers per call
@@ -69,8 +69,8 @@ describe('Phase 5 – Smoke Tests', () => {
     const { tools: tools1 } = await pair1.client.listTools()
     const { tools: tools2 } = await pair2.client.listTools()
 
-    expect(tools1.map((t) => t.name).sort()).toEqual(['eurlex_by_eurovoc', 'eurlex_citations', 'eurlex_consolidated', 'eurlex_fetch', 'eurlex_metadata', 'eurlex_search'])
-    expect(tools2.map((t) => t.name).sort()).toEqual(['eurlex_by_eurovoc', 'eurlex_citations', 'eurlex_consolidated', 'eurlex_fetch', 'eurlex_metadata', 'eurlex_search'])
+    expect(tools1.map((t) => t.name).sort()).toEqual(['eurlex_by_eurovoc', 'eurlex_citations', 'eurlex_consolidated', 'eurlex_deadlines', 'eurlex_fetch', 'eurlex_metadata', 'eurlex_search'])
+    expect(tools2.map((t) => t.name).sort()).toEqual(['eurlex_by_eurovoc', 'eurlex_citations', 'eurlex_consolidated', 'eurlex_deadlines', 'eurlex_fetch', 'eurlex_metadata', 'eurlex_search'])
 
     // They should be distinct object instances
     expect(pair1.server).not.toBe(pair2.server)
@@ -159,4 +159,16 @@ describe('Phase 5 – Smoke Tests', () => {
 
     expect(promptNames).toContain('eurlex_guide')
   })
+
+  it('eurlex_deadlines has annotations readOnlyHint=true, destructiveHint=false', async () => {
+  const pair = await createTestPair()
+  pairs.push(pair)
+
+  const { tools } = await pair.client.listTools()
+  const deadlines = tools.find((t) => t.name === 'eurlex_deadlines')
+
+  expect(deadlines?.annotations).toBeDefined()
+  expect(deadlines?.annotations?.readOnlyHint).toBe(true)
+  expect(deadlines?.annotations?.destructiveHint).toBe(false)
+})
 })

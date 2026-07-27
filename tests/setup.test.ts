@@ -9,7 +9,7 @@ describe('Project Setup', () => {
     expect(DEFAULT_LIMIT).toBe(10)
     expect(MAX_CHARS_DEFAULT).toBe(20000)
     expect(MAX_CHARS_LIMIT).toBe(50000)
-    expect(RESOURCE_TYPES).toHaveLength(14)
+    expect(RESOURCE_TYPES).toHaveLength(17)
     expect(RESOURCE_TYPES).toContain('REG')
     expect(RESOURCE_TYPES).toContain('any')
   })

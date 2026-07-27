@@ -232,7 +232,7 @@ describe('buildSparqlQuery()', () => {
     expect(sparql).not.toMatch(/OPTIONAL\s*\{[^}]*title[^}]*\}/i)
     // Only one OPTIONAL (for date)
     const optionalMatches = sparql.match(/OPTIONAL/g) || []
-    expect(optionalMatches.length).toBe(1)
+    expect(optionalMatches.length).toBe(3)
   })
 })
 
